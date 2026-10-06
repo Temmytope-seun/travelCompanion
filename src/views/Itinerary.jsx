@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   RefreshCw, Plus, Trash2, GripVertical, ChevronUp, ChevronDown, MapPin, ExternalLink, AlertTriangle,
-  Check, List, Map as MapIcon, Search, CloudRain, Coffee,
+  Check, List, CalendarPlus, Map as MapIcon, Search, CloudRain, Coffee,
 } from "lucide-react";
 import { useStore } from "../store.jsx";
 import { PageHead, CatIcon, Modal, gbp } from "../components/ui.jsx";
@@ -12,6 +12,7 @@ import { findConflicts, generateItinerary, reorderDay, reflow, isActivity, addPl
 import { weatherLabel, isRainy } from "../lib/api.js";
 import { activityUrl, mapsSearchUrl } from "../lib/links.js";
 import { currentDayIndex } from "../lib/assistant.js";
+import { downloadIcs } from "../lib/ics.js";
 
 export default function Itinerary({ go, live }) {
   const { trip, setItinerary, notify, undo, updateTrip } = useStore();
@@ -71,6 +72,7 @@ export default function Itinerary({ go, live }) {
             <button className="on"><List />List</button>
             <button onClick={() => go("map")}><MapIcon />Map</button>
           </div>
+          <button className="btn btn-secondary" onClick={() => { downloadIcs(trip); notify("Calendar file downloaded — open it to add your trip to Google, Apple or Outlook Calendar"); }}><CalendarPlus />Calendar</button>
           <button className="btn btn-secondary" onClick={regenerate}><RefreshCw />Regenerate</button>
           <button className="btn btn-primary" onClick={() => setAdding(true)}><Plus />Add</button>
         </>}

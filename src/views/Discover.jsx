@@ -5,7 +5,7 @@ import { PageHead, Card, Empty } from "../components/ui.jsx";
 import { catalogFor } from "../data/destinations.js";
 import { cat } from "../data/catalog.js";
 import { addPlace, bestDayFor, matchPercent, reasonFor, scorePlace } from "../lib/itinerary.js";
-import { PLACES_KEY, searchPlaces, placePhotoUrl } from "../lib/api.js";
+import { searchPlaces, placePhotoUrl } from "../lib/api.js";
 import { fetchCatalog, fromGoogle, isLodging, isStale } from "../lib/livePlaces.js";
 import { generateItinerary } from "../lib/itinerary.js";
 import { activityUrl, airbnbUrl, bookingUrl, mapsSearchUrl } from "../lib/links.js";
@@ -29,7 +29,8 @@ const IN_TAB = {
 };
 
 export default function Discover() {
-  const { trip, setItinerary, notify, undo, updateTrip } = useStore();
+  const { trip, setItinerary, notify, undo, updateTrip, caps } = useStore();
+  const PLACES = caps.places;
   const { dest, places, food, stays, curated, live: hasLive } = catalogFor(trip);
   const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState("foryou");
@@ -74,7 +75,7 @@ export default function Discover() {
 
   const searchLive = async () => {
     if (!q.trim()) return;
-    if (!PLACES_KEY) { notify("Add VITE_GOOGLE_MAPS_API_KEY to search live Google Places."); return; }
+    if (!PLACES) { notify("Live search needs GOOGLE_MAPS_API_KEY on the server."); return; }
     setLoading(true);
     try { setLive(await searchPlaces(`${q} in ${trip.city}, ${trip.destination}`)); }
     catch (e) { notify(e.message); }
@@ -120,9 +121,9 @@ export default function Discover() {
             <b>{hasLive ? `Real places in ${dest.city}, from Google` : `These are generic ideas for ${dest.city}`}</b>
             <p>{hasLive
               ? `Loaded ${new Date(trip.catalog.fetchedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}${isStale(trip.catalog) ? " — over 30 days ago, refresh for current details" : ""}. Ratings and prices come from Google; prices are estimates.`
-              : PLACES_KEY ? "Load rated attractions, restaurants and hotels picked for your interests. Your itinerary will be rebuilt (you can undo)." : "Add VITE_GOOGLE_MAPS_API_KEY to .env to load real places for any destination."}</p>
+                : PLACES ? "Load rated attractions, restaurants and hotels picked for your interests. Your itinerary will be rebuilt (you can undo)." : "Set GOOGLE_MAPS_API_KEY in .env and run the API server to load real places for any destination."}</p>
           </div>
-          {PLACES_KEY && (
+          {PLACES && (
             <button className={`btn ${hasLive ? "btn-secondary" : "btn-primary"}`} onClick={loadPlaces} disabled={syncing}>
               {syncing ? <Loader2 className="spin" /> : hasLive ? <RefreshCw /> : <Globe />}{hasLive ? "Refresh" : "Load real places"}
             </button>

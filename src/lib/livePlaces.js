@@ -1,6 +1,6 @@
 // Builds a destination catalog from Google Places (New) so non-curated destinations get
 // real, rated places instead of generic templates. Results are stored on the trip.
-import { PLACES_KEY, searchPlaces } from "./api.js";
+import { searchPlaces } from "./api.js";
 
 // Google place types → app category, with sensible planning defaults.
 const TYPE_MAP = [
@@ -93,14 +93,11 @@ const INTEREST_QUERIES = {
   family: ["family activities in", { category: "adventure", duration: 120, outdoor: true }],
 };
 
-export const canFetchCatalog = () => !!PLACES_KEY;
-
 /**
  * Runs ~6–12 Text Search requests tailored to the trip and returns { places, food, stays }.
  * Individual failed searches are skipped; throws only if nothing came back.
  */
 export async function fetchCatalog(trip, dest) {
-  if (!PLACES_KEY) throw new Error("Add VITE_GOOGLE_MAPS_API_KEY to load real places.");
   const where = `${dest.city}, ${dest.name}`;
   const queries = [
     { q: `top tourist attractions in ${where}`, tags: ["culture", "photography"], n: 10 },

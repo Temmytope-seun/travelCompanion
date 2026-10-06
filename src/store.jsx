@@ -3,6 +3,7 @@ import { CHECKLIST_TEMPLATE, PARTIES } from "./data/catalog.js";
 import { findDestination } from "./data/destinations.js";
 import { generateItinerary, uid } from "./lib/itinerary.js";
 import { addDays, today } from "./lib/dates.js";
+import { api, loadConfig } from "./lib/api.js";
 
 const KEY = "journeyai.v2";
 const Ctx = createContext(null);
@@ -98,13 +99,29 @@ function initial() {
   return s;
 }
 
+const stamp = (t) => ({ ...t, updatedAt: Date.now() });
+
+function remembered(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+}
+function remember(key, value) {
+  try { value == null ? localStorage.removeItem(key) : localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
+}
+
 export function StoreProvider({ children }) {
   const [state, setState] = useState(initial);
   const [toast, setToast] = useState(null);
+  const [caps, setCaps] = useState(() => remembered("journeyai.caps") || { places: false, ai: false, accounts: false, push: false });
+  const [user, setUserState] = useState(() => remembered("journeyai.user"));
+  const setUser = useCallback((u) => { setUserState(u); remember("journeyai.user", u); }, []);
+  const [sync, setSync] = useState({ status: "idle", at: null });
   const undoStack = useRef([]);
   const [undoLabel, setUndoLabel] = useState(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const userRef = useRef(user);
+  userRef.current = user;
+  const syncing = useRef(false);
 
   useEffect(() => {
     try {
@@ -119,7 +136,7 @@ export function StoreProvider({ children }) {
   const updateTrip = useCallback((patch) => {
     setState((s) => ({
       ...s,
-      trips: s.trips.map((t) => (t.id === s.activeId ? { ...t, ...(typeof patch === "function" ? patch(t) : patch) } : t)),
+      trips: s.trips.map((t) => (t.id === s.activeId ? stamp({ ...t, ...(typeof patch === "function" ? patch(t) : patch) }) : t)),
     }));
   }, []);
 
@@ -133,13 +150,13 @@ export function StoreProvider({ children }) {
       setUndoLabel(label);
     }
     const itinerary = typeof next === "function" ? next(current.itinerary) : next;
-    setState((st) => ({ ...st, trips: st.trips.map((t) => (t.id === current.id ? { ...t, itinerary } : t)) }));
+    setState((st) => ({ ...st, trips: st.trips.map((t) => (t.id === current.id ? stamp({ ...t, itinerary }) : t)) }));
   }, []);
 
   const undo = useCallback(() => {
     const prev = undoStack.current.pop();
     if (!prev) return;
-    setState((s) => ({ ...s, trips: s.trips.map((t) => (t.id === s.activeId ? { ...t, itinerary: prev } : t)) }));
+    setState((s) => ({ ...s, trips: s.trips.map((t) => (t.id === s.activeId ? stamp({ ...t, itinerary: prev }) : t)) }));
     setUndoLabel(undoStack.current.length ? "previous change" : null);
     setToast({ message: "Change undone" });
   }, []);
@@ -147,7 +164,7 @@ export function StoreProvider({ children }) {
   const addTrip = useCallback((t) => {
     undoStack.current = [];
     setUndoLabel(null);
-    setState((s) => ({ ...s, trips: [...s.trips, t], activeId: t.id }));
+    setState((s) => ({ ...s, trips: [...s.trips, stamp(t)], activeId: t.id }));
   }, []);
 
   const switchTrip = useCallback((id) => {
@@ -159,7 +176,9 @@ export function StoreProvider({ children }) {
   const deleteTrip = useCallback((id) => {
     setState((s) => {
       const trips = s.trips.filter((t) => t.id !== id);
-      return { ...s, trips, activeId: s.activeId === id ? trips[0]?.id || null : s.activeId };
+      // Remember the deletion so it reaches the server on the next sync.
+      const pendingDeletes = userRef.current ? [...(s.pendingDeletes || []), id] : s.pendingDeletes;
+      return { ...s, trips, pendingDeletes, activeId: s.activeId === id ? trips[0]?.id || null : s.activeId };
     });
   }, []);
 
@@ -167,9 +186,100 @@ export function StoreProvider({ children }) {
 
   const notify = useCallback((message, action) => setToast({ message, action, key: Date.now() }), []);
 
+  // ---- Accounts & sync ---------------------------------------------------
+
+  /** Two-way sync: push deletions, pull newer server copies, push local changes. */
+  const syncNow = useCallback(async () => {
+    if (!userRef.current || syncing.current) return;
+    syncing.current = true;
+    setSync((x) => ({ ...x, status: "syncing" }));
+    try {
+      for (const id of stateRef.current.pendingDeletes || []) await api(`/trips/${id}`, { method: "DELETE" });
+      const remote = await api("/trips");
+      const synced = { ...(stateRef.current.synced || {}) };
+
+      setState((s) => {
+        const removed = new Set(remote.deleted);
+        let trips = s.trips.filter((t) => !removed.has(t.id));
+        for (const r of remote.trips) {
+          const local = trips.find((t) => t.id === r.id);
+          if (!local) trips = [...trips, { ...r.data, updatedAt: r.updated }];
+          else if (r.updated > (local.updatedAt || 0)) trips = trips.map((t) => (t.id === r.id ? { ...r.data, updatedAt: r.updated } : t));
+          synced[r.id] = Math.max(synced[r.id] || 0, r.updated);
+        }
+        const activeId = trips.some((t) => t.id === s.activeId) ? s.activeId : trips[0]?.id || null;
+        return { ...s, trips, activeId, pendingDeletes: [], synced };
+      });
+      await new Promise((r) => setTimeout(r, 0));
+
+      for (const t of stateRef.current.trips) {
+        if (t.id in synced && (t.updatedAt || 0) <= synced[t.id]) continue;
+        try {
+          await api(`/trips/${t.id}`, { method: "PUT", body: { data: t, updated: t.updatedAt || Date.now() } });
+          synced[t.id] = t.updatedAt || Date.now();
+        } catch (err) {
+          if (err.status !== 409) throw err;
+          const r = err.data.trip; // server copy is newer — take it
+          setState((s) => ({ ...s, trips: s.trips.map((x) => (x.id === r.id ? { ...r.data, updatedAt: r.updated } : x)) }));
+          synced[r.id] = r.updated;
+        }
+      }
+      setState((s) => ({ ...s, synced: { ...s.synced, ...synced } }));
+      setSync({ status: "synced", at: Date.now() });
+    } catch (err) {
+      if (err.status === 401) setUser(null);
+      setSync((x) => ({ ...x, status: navigator.onLine ? "error" : "offline" }));
+    } finally {
+      syncing.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    // Offline, keep the last-known features and account so the app still works.
+    loadConfig().then((c) => {
+      if (c.offline) return;
+      setCaps(c);
+      remember("journeyai.caps", c);
+      if (c.accounts) api("/auth/me").then((r) => setUser(r.user)).catch(() => {});
+    });
+  }, [setUser]);
+
+  // Sync on sign-in, shortly after local changes, when back online, and every 5 minutes.
+  useEffect(() => { if (user) syncNow(); }, [user, syncNow]);
+  const dirty = !!user && (
+    (state.pendingDeletes || []).length > 0 ||
+    state.trips.some((t) => !(t.id in (state.synced || {})) || (t.updatedAt || 0) > state.synced[t.id])
+  );
+  useEffect(() => {
+    if (!dirty) return;
+    const t = setTimeout(syncNow, 1200);
+    return () => clearTimeout(t);
+  }, [dirty, state.trips, syncNow]);
+  useEffect(() => {
+    if (!user) return;
+    const iv = setInterval(syncNow, 5 * 60_000);
+    window.addEventListener("online", syncNow);
+    return () => { clearInterval(iv); window.removeEventListener("online", syncNow); };
+  }, [user, syncNow]);
+
+  const signIn = useCallback(async (mode, form) => {
+    const r = await api(`/auth/${mode === "signup" ? "signup" : "login"}`, { method: "POST", body: form });
+    setUser(r.user);
+    setState((s) => ({ ...s, synced: {}, profile: { ...s.profile, name: s.profile?.name || r.user.name } }));
+    return r.user;
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await api("/auth/logout", { method: "POST" }).catch(() => {});
+    setUser(null);
+    setSync({ status: "idle", at: null });
+    // Trips live in the account; clear them from this device.
+    setState((s) => ({ ...s, trips: [], activeId: null, synced: {}, pendingDeletes: [] }));
+  }, []);
+
   const value = useMemo(
-    () => ({ state, trip, updateTrip, setItinerary, undo, undoLabel, addTrip, switchTrip, deleteTrip, setProfile, toast, setToast, notify }),
-    [state, trip, updateTrip, setItinerary, undo, undoLabel, addTrip, switchTrip, deleteTrip, setProfile, toast, notify],
+    () => ({ state, trip, updateTrip, setItinerary, undo, undoLabel, addTrip, switchTrip, deleteTrip, setProfile, toast, setToast, notify, caps, user, sync, syncNow, signIn, signOut }),
+    [state, trip, updateTrip, setItinerary, undo, undoLabel, addTrip, switchTrip, deleteTrip, setProfile, toast, notify, caps, user, sync, syncNow, signIn, signOut],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

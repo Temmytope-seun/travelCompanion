@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, BellRing, ExternalLink, X, Check, ArrowRight } from "lucide-react";
+import { Bell, BellRing, BellOff, ExternalLink, X, Check, ArrowRight, Loader2, Send } from "lucide-react";
+import { SignInModal } from "../components/Account.jsx";
+import { pushSupported, currentSubscription, enablePush, disablePush, sendTestPush } from "../lib/push.js";
 import { useStore } from "../store.jsx";
 import { PageHead, Card, Empty } from "../components/ui.jsx";
 import { buildReminders, splitReminders } from "../lib/reminders.js";
@@ -11,6 +13,8 @@ const fmtWhen = (d) => d.toLocaleString("en-GB", { weekday: "short", day: "numer
 export function useBrowserNotifications(trip) {
   useEffect(() => {
     if (!trip || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    // With server push on, reminders arrive from the server; don't double up.
+    try { if (localStorage.getItem("journeyai.push") === "on") return; } catch { /* ignore */ }
     const now = Date.now();
     const timers = buildReminders(trip)
       .filter((r) => !trip.dismissed.includes(r.id) && !r.done && r.at - now > 0 && r.at - now < 24 * 3600000)
@@ -20,7 +24,7 @@ export function useBrowserNotifications(trip) {
 }
 
 export default function Alerts({ go }) {
-  const { trip, updateTrip } = useStore();
+  const { trip, updateTrip, caps } = useStore();
   const [perm, setPerm] = useState(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
   const groups = useMemo(() => splitReminders(buildReminders(trip), trip.dismissed), [trip]);
 
@@ -54,10 +58,11 @@ export default function Alerts({ go }) {
         eyebrow="Alerts"
         title="Reminders that arrive at the right moment"
         sub="Generated from your dates, flights and plans: check-in 24 hours before you fly, transfer warnings for late arrivals, and nudges before each activity."
-        actions={perm === "default" ? <button className="btn btn-dark" onClick={enable}><BellRing />Enable notifications</button>
-          : perm === "granted" ? <span className="badge ok"><Check />Notifications on</span> : null}
+        actions={!caps.push && (perm === "default" ? <button className="btn btn-dark" onClick={enable}><BellRing />Enable notifications</button>
+          : perm === "granted" ? <span className="badge ok"><Check />Notifications on</span> : null)}
       />
       <div className="stack">
+        {caps.push && <PushCard />}
         <Card title="Needs attention" icon={BellRing} action={<span className="badge accent">{groups.due.length}</span>}>
           {groups.due.length ? groups.due.map((r) => <Row key={r.id} r={r} state="due" />) : <Empty icon={Bell} title="You're all caught up">New reminders appear here as your trip approaches.</Empty>}
         </Card>
@@ -72,5 +77,50 @@ export default function Alerts({ go }) {
         )}
       </div>
     </>
+  );
+}
+
+/** Server push: reminders reach the traveller even when the app is closed. */
+function PushCard() {
+  const { user, notify } = useStore();
+  const [sub, setSub] = useState(undefined);
+  const [busy, setBusy] = useState(false);
+  const [signIn, setSignIn] = useState(false);
+  const flag = (v) => { try { localStorage.setItem("journeyai.push", v); } catch { /* ignore */ } };
+
+  useEffect(() => { currentSubscription().then(setSub).catch(() => setSub(null)); }, []);
+
+  const run = async (fn) => {
+    setBusy(true);
+    try { await fn(); } catch (err) { notify(err.message); } finally { setBusy(false); }
+  };
+
+  if (!pushSupported()) {
+    return <Card title="Push reminders" icon={BellOff}><p className="muted mt0">This browser doesn't support push notifications. On iPhone, add JourneyAI to your Home Screen first (Share → Add to Home Screen).</p></Card>;
+  }
+  const on = !!sub && !!user;
+  return (
+    <div className="attention" style={{ borderLeftColor: on ? "var(--sea)" : undefined }}>
+      <span className="ic" style={on ? { background: "var(--sea-soft)", color: "var(--sea)" } : undefined}>{on ? <BellRing /> : <Bell />}</span>
+      <div>
+        <b>{on ? "Push reminders are on for this device" : "Get reminders even when the app is closed"}</b>
+        <p>{on ? "Check-in, transfer, activity and appointment reminders arrive as notifications." : user ? "Turn on push notifications for this device." : "Sign in so we can send reminders for your synced trips."}</p>
+      </div>
+      <div className="row wrap" style={{ marginLeft: "auto" }}>
+        {!user ? (
+          <button className="btn btn-dark" onClick={() => setSignIn(true)}>Sign in</button>
+        ) : on ? (
+          <>
+            <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => run(async () => { const r = await sendTestPush(); notify(`Test sent to ${r.sent} device${r.sent === 1 ? "" : "s"}`); })}><Send />Send test</button>
+            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => run(async () => { await disablePush(); flag("off"); setSub(null); notify("Push reminders turned off"); })}>Turn off</button>
+          </>
+        ) : (
+          <button className="btn btn-dark" disabled={busy || sub === undefined} onClick={() => run(async () => { setSub(await enablePush()); flag("on"); notify("Push reminders are on"); })}>
+            {busy ? <Loader2 className="spin" /> : <BellRing />}Turn on
+          </button>
+        )}
+      </div>
+      {signIn && <SignInModal onClose={() => setSignIn(false)} reason="Reminders are sent for trips saved to your account." />}
+    </div>
   );
 }

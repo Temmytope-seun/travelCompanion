@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Plane, BedDouble, Car, ExternalLink, Pencil, AlertTriangle, Check, Plus, Compass } from "lucide-react";
+import { Plane, BedDouble, Car, ExternalLink, Pencil, AlertTriangle, Check, Plus, Compass, MailPlus, Loader2, Sparkles } from "lucide-react";
+import { api } from "../lib/api.js";
+import { applyBookings, describeTarget } from "../lib/importBookings.js";
 import { useStore } from "../store.jsx";
 import { PageHead, Card, Modal } from "../components/ui.jsx";
 import { destinationFor } from "../data/destinations.js";
@@ -9,7 +11,7 @@ import { googleFlightsUrl, checkinUrl, bookingUrl, airbnbUrl, transferUrl } from
 import { isLateArrival } from "../lib/readiness.js";
 import { generateItinerary } from "../lib/itinerary.js";
 
-export default function Bookings({ go }) {
+export default function Bookings({ go, live }) {
   const { trip, updateTrip, setItinerary, notify, undo } = useStore();
   const dest = destinationFor(trip);
   const [editing, setEditing] = useState(null);
@@ -27,7 +29,8 @@ export default function Bookings({ go }) {
 
   return (
     <>
-      <PageHead eyebrow="Bookings" title="Flights, stay & transfers" sub="Everything you've booked, wherever you booked it. Bookings made on other sites still appear in your plan." />
+      <PageHead eyebrow="Bookings" title="Flights, stay & transfers" sub="Everything you've booked, wherever you booked it. Bookings made on other sites still appear in your plan."
+        actions={<button className="btn btn-dark" onClick={() => setEditing("import")}><MailPlus />Import from email</button>} />
 
       <div className="stack">
         <section>
@@ -122,6 +125,7 @@ export default function Bookings({ go }) {
       {(editing === "flight" || editing === "returnFlight") && (
         <FlightForm initial={trip[editing]} title={editing === "flight" ? "Outbound flight" : "Return flight"} onClose={() => setEditing(null)} onSave={(d) => saveFlight(editing, d)} />
       )}
+      {editing === "import" && <ImportModal live={live} onClose={() => setEditing(null)} />}
       {editing === "stay" && <StayForm initial={trip.stay} onClose={() => setEditing(null)} onSave={(d) => { updateTrip({ stay: { ...trip.stay, ...d, booked: true } }); setEditing(null); notify("Accommodation saved"); }} />}
     </>
   );
@@ -209,6 +213,82 @@ function StayForm({ initial = {}, onClose, onSave }) {
         <label className="field">Phone<input value={f.phone} onChange={set("phone")} /></label>
       </div>
       <button className="btn btn-primary btn-block" style={{ marginTop: 16 }} disabled={!f.name.trim()} onClick={() => onSave(f)}>Save accommodation</button>
+    </Modal>
+  );
+}
+
+/** Paste a confirmation email; Claude extracts the bookings; the traveller confirms what to add. */
+function ImportModal({ live, onClose }) {
+  const { trip, caps, updateTrip, setItinerary, notify, undo } = useStore();
+  const [text, setText] = useState("");
+  const [found, setFound] = useState(null);
+  const [picked, setPicked] = useState({});
+  const [expenses, setExpenses] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const extract = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const { bookings } = await api("/extract", { method: "POST", body: { text, trip: { destination: trip.destination, startDate: trip.startDate, endDate: trip.endDate, origin: trip.origin } } });
+      setFound(bookings);
+      setPicked(Object.fromEntries(bookings.map((b, i) => [i, !describeTarget(trip, b).startsWith("Outside")])));
+      if (!bookings.length) setError("No bookings found in that text.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = () => {
+    const chosen = found.filter((_, i) => picked[i]);
+    const r = applyBookings(trip, chosen, { addExpenses: expenses, rates: live?.fx?.rates });
+    const { itinerary, ...rest } = r.trip;
+    setItinerary(itinerary, "import bookings");
+    updateTrip(rest);
+    notify(`Added: ${r.summary.join(", ")}${r.skipped.length ? `. Skipped: ${r.skipped.join(", ")}` : ""}`, { label: "Undo plan change", run: undo });
+    onClose();
+  };
+
+  const fmtWhen = (b) => [b.date, b.time].filter(Boolean).join(" ") || "no date";
+
+  return (
+    <Modal onClose={onClose} label="Import from email">
+      <h2>Import a booking</h2>
+      <p className="muted" style={{ marginTop: 0 }}>Paste a confirmation email (flight, hotel, tour, restaurant, transfer or appointment). We'll pull out the dates, times, references and costs, and you choose what to add.</p>
+      {!caps.ai ? (
+        <div className="conflict-banner rain-banner" style={{ margin: 0 }}>Email import needs ANTHROPIC_API_KEY on the server. You can still add bookings manually.</div>
+      ) : !found ? (
+        <>
+          <textarea className="input" rows={10} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste the confirmation email here…" style={{ resize: "vertical", fontSize: 13 }} />
+          <p className="muted" style={{ fontSize: 12 }}>The text is sent to Claude to read the booking details. Avoid pasting passport or card numbers.</p>
+          {error && <div className="conflict-banner" style={{ margin: "0 0 10px" }}>{error}</div>}
+          <button className="btn btn-primary btn-block" disabled={busy || text.trim().length < 20} onClick={extract}>{busy ? <Loader2 className="spin" /> : <Sparkles />}{busy ? "Reading email…" : "Find bookings"}</button>
+        </>
+      ) : (
+        <>
+          <div className="stack" style={{ gap: 8, marginBottom: 14 }}>
+            {found.map((b, i) => (
+              <label key={i} className="check" style={{ alignItems: "flex-start", border: "1px solid var(--line)" }}>
+                <input type="checkbox" checked={!!picked[i]} onChange={(e) => setPicked({ ...picked, [i]: e.target.checked })} style={{ marginTop: 4 }} />
+                <span>
+                  <b style={{ fontWeight: 600 }}>{b.title}</b><br />
+                  <small>{fmtWhen(b)}{b.reference ? ` · Ref ${b.reference}` : ""}{b.cost != null ? ` · ${b.cost} ${b.currency || ""}` : ""}</small><br />
+                  <small style={{ color: "var(--sea)", fontWeight: 600 }}>→ {describeTarget(trip, b)}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+          <label className="switch" style={{ marginBottom: 14 }}><input type="checkbox" checked={expenses} onChange={(e) => setExpenses(e.target.checked)} />Add costs to trip expenses</label>
+          {found.some((b, i) => picked[i] && b.kind === "flight") && <p className="muted" style={{ fontSize: 12.5 }}>Flight times change your first and last days, so the itinerary will be rebuilt around them (you can undo).</p>}
+          <div className="row">
+            <button className="btn btn-ghost" onClick={() => setFound(null)}>Back</button>
+            <button className="btn btn-primary" style={{ marginLeft: "auto" }} disabled={!Object.values(picked).some(Boolean)} onClick={apply}><Check />Add to trip</button>
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, CalendarDays, Map as MapIcon, Compass, Ticket, ListChecks, Wallet, Bell,
-  Settings, Plus, ChevronDown, Moon, Sun, Sparkles, Menu, Trash2,
+  Settings, Plus, ChevronDown, Moon, Sun, Sparkles, Menu, Trash2, WifiOff,
 } from "lucide-react";
 import { useStore, demoTrip } from "./store.jsx";
 import { Brand, Ring, Drawer } from "./components/ui.jsx";
@@ -21,6 +21,7 @@ import Budget from "./views/Budget.jsx";
 import Alerts, { useBrowserNotifications } from "./views/Alerts.jsx";
 import TripSettings from "./views/TripSettings.jsx";
 import Assistant from "./components/Assistant.jsx";
+import { AccountChip } from "./components/Account.jsx";
 
 const NAV = [
   { group: "Plan", items: [
@@ -58,6 +59,18 @@ function useTheme() {
   return { dark, toggle: () => setTheme(dark ? "light" : "dark") };
 }
 
+function useOnline() {
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+  return online;
+}
+
 function useHashView() {
   const read = () => (window.location.hash.slice(1) in VIEWS ? window.location.hash.slice(1) : "overview");
   const [view, setView] = useState(read);
@@ -82,6 +95,7 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const theme = useTheme();
+  const online = useOnline();
   const live = useLive(trip);
   useBrowserNotifications(trip);
 
@@ -127,6 +141,7 @@ export default function App() {
 
       <main className="main">
         <div className="main-inner" key={trip.id + view}>
+          {!online && <div className="offline-pill" role="status"><WifiOff />You're offline — showing your saved trip. Changes will sync when you're back online.</div>}
           <View {...ctx} />
         </div>
       </main>
@@ -156,6 +171,8 @@ export default function App() {
             <Brand />
             <div style={{ height: 16 }} />
             <TripSwitcher onNew={() => { setMoreOpen(false); setCreating(true); }} />
+            <div style={{ height: 10 }} />
+            <AccountChip />
             <div style={{ height: 12 }} />
             <nav className="nav">
               {[...NAV[1].items, { id: "settings", label: "Trip settings", icon: Settings }].map((n) => (
@@ -200,6 +217,7 @@ function Sidebar({ view, go, ready, dueCount, theme, onNew }) {
         ))}
       </nav>
       <div className="sidebar-foot">
+        <AccountChip />
         <button className="mini-ready" onClick={() => go("checklist")} style={{ textAlign: "left" }}>
           <Ring value={ready.score} size={46} stroke={5} />
           <div>

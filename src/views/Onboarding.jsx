@@ -3,7 +3,9 @@ import { ArrowLeft, ArrowRight, Check, ExternalLink, Loader2, Plane, Sparkles, X
 import { Brand, RouteArt } from "../components/ui.jsx";
 import { INTERESTS, PARTIES, STAY_TYPES } from "../data/catalog.js";
 import { DESTINATIONS, POPULAR, findDestination, catalogFor, destinationFor } from "../data/destinations.js";
-import { canFetchCatalog, fetchCatalog } from "../lib/livePlaces.js";
+import { fetchCatalog } from "../lib/livePlaces.js";
+import { useStore } from "../store.jsx";
+import { SignInModal } from "../components/Account.jsx";
 import { addDays, today, daysBetween, fmtRange } from "../lib/dates.js";
 import { googleFlightsUrl } from "../lib/links.js";
 import { countryInfo, geocode } from "../lib/api.js";
@@ -13,6 +15,8 @@ const STEPS = ["where", "when", "who", "interests", "flight", "stay", "ready"];
 const JOURNEY = ["Before travel", "Flight", "Airport", "Arrival", "Accommodation", "Daily plans", "Food", "Transport", "Departure", "Return home"];
 
 export default function Onboarding({ onDone, onDemo, canCancel, onCancel }) {
+  const { caps, user } = useStore();
+  const [signIn, setSignIn] = useState(false);
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -62,7 +66,7 @@ export default function Onboarding({ onDone, onDemo, canCancel, onCancel }) {
     const minDelay = new Promise((r) => setTimeout(r, 1900));
     // Non-curated destinations: load real places from Google while the animation plays.
     let catalog;
-    if (!catalogFor({ destination: f.destination, interests: f.interests }).curated && canFetchCatalog()) {
+    if (!catalogFor({ destination: f.destination, interests: f.interests }).curated && caps.places) {
       const dest = destinationFor({ destination: f.destination, city: f.city, coords: f.coords, flag: f.flag, currency: f.currency });
       catalog = await fetchCatalog({ interests: f.interests }, dest).catch(() => undefined);
     }
@@ -123,6 +127,7 @@ export default function Onboarding({ onDone, onDemo, canCancel, onCancel }) {
               )}
               <p className="muted" style={{ margin: 0 }}>
                 Just looking? <button className="link" onClick={onDemo}>Explore the Albania demo trip <ArrowRight /></button>
+                {caps.accounts && !user && <><br />Planned on another device? <button className="link" onClick={() => setSignIn(true)}>Sign in to get your trips <ArrowRight /></button></>}
               </p>
             </>}
 
@@ -250,6 +255,7 @@ export default function Onboarding({ onDone, onDemo, canCancel, onCancel }) {
           </div>
         )}
       </section>
+      {signIn && <SignInModal onClose={() => setSignIn(false)} reason="Sign in and your saved trips will appear on this device." />}
     </div>
   );
 }

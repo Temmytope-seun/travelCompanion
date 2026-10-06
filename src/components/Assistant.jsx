@@ -5,13 +5,15 @@ import { Md } from "./ui.jsx";
 import { interpret, SUGGESTIONS } from "../lib/assistant.js";
 import { destinationFor } from "../data/destinations.js";
 import { uid } from "../lib/itinerary.js";
+import { api } from "../lib/api.js";
 
 export default function Assistant({ live, go }) {
-  const { trip, updateTrip, setItinerary, undo } = useStore();
+  const { trip, updateTrip, setItinerary, undo, caps } = useStore();
   const [text, setText] = useState("");
   const [thinking, setThinking] = useState(false);
   const log = useRef(null);
   const dest = destinationFor(trip);
+  const destCode = dest.currency.code;
   const messages = trip.chat || [];
   const first = trip.people?.[0] && !/^(You|Traveller)/.test(trip.people[0]) ? `, ${trip.people[0]}` : "";
 
@@ -32,13 +34,24 @@ export default function Assistant({ live, go }) {
       return;
     }
     setThinking(true);
-    setTimeout(() => {
-      const r = interpret(q, { trip, fx: live.fx, weather: live.weather });
+    const apply = (r) => {
       if (r.itinerary) setItinerary(r.itinerary, r.label || "assistant change");
       if (r.tripPatch) updateTrip(r.tripPatch);
       push({ role: "bot", text: r.reply, links: r.links, applied: !!r.itinerary });
       setThinking(false);
-    }, 450);
+    };
+    const local = () => apply(interpret(q, { trip, fx: live.fx, weather: live.weather }));
+    if (!caps.ai) return void setTimeout(local, 350);
+
+    // Claude on the server, with the trip as context; fall back to the local assistant on failure.
+    const history = messages.slice(-10).map((m) => ({ role: m.role === "bot" ? "assistant" : "user", text: m.text }));
+    const fx = live.fx?.rates ? Object.fromEntries(["EUR", "USD", destCode].filter((c) => live.fx.rates[c]).map((c) => [c, live.fx.rates[c]])) : undefined;
+    api("/assistant", { method: "POST", body: { message: q, history, trip, weather: live.weather?.days, fx } })
+      .then(apply)
+      .catch((err) => {
+        if (err.status === 429) apply({ reply: err.message });
+        else local();
+      });
   };
 
   return (
@@ -47,7 +60,7 @@ export default function Assistant({ live, go }) {
         <span className="chat-avatar"><Sparkles /></span>
         <div style={{ flex: 1 }}>
           <b>Trip assistant</b>
-          <small><i />Knows your {dest.city} plans</small>
+          <small><i />{caps.ai ? "Claude · knows" : "Knows"} your {dest.city} plans</small>
         </div>
         {messages.length > 0 && <button className="btn btn-ghost btn-sm" onClick={() => updateTrip({ chat: [] })} title="Clear conversation"><RotateCcw /></button>}
       </div>

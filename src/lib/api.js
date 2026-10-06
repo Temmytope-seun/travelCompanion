@@ -1,7 +1,27 @@
 // Live data: Open-Meteo (weather + geocoding), open.er-api.com (FX, covers ALL),
-// REST Countries (flag/currency for unknown destinations), optional Google Places.
+// REST Countries (flag/currency for unknown destinations), and our API server
+// (Google Places proxy, Claude assistant, accounts, push).
 
-export const PLACES_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
+/** JSON request to our own API server. Throws an Error carrying `status` on failure. */
+export async function api(path, { method = "GET", body } = {}) {
+  const r = await fetch(`/api${path}`, {
+    method,
+    credentials: "same-origin",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const err = new Error(data.error || `Request failed (${r.status})`);
+    err.status = r.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+/** Which server features are on. All off when the API server isn't reachable. */
+export const loadConfig = () => api("/config").catch(() => ({ places: false, ai: false, accounts: false, push: false, offline: true }));
 
 const cache = new Map();
 async function getJson(url, init) {
@@ -58,22 +78,11 @@ export async function countryInfo(name) {
 }
 
 export async function searchPlaces(query, max = 9) {
-  if (!PLACES_KEY) return [];
-  const d = await getJson("https://places.googleapis.com/v1/places:searchText", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": PLACES_KEY,
-      "X-Goog-FieldMask":
-        "places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.websiteUri,places.googleMapsUri,places.photos,places.priceLevel,places.location,places.primaryType,places.types,places.businessStatus",
-    },
-    body: JSON.stringify({ textQuery: query, maxResultCount: max }),
-  });
-  return d.places || [];
+  return (await api("/places/search", { method: "POST", body: { query, max } })).places || [];
 }
 
 export function placePhotoUrl(photo) {
-  return photo && PLACES_KEY ? `https://places.googleapis.com/v1/${photo.name}/media?maxWidthPx=640&key=${PLACES_KEY}` : null;
+  return photo?.name ? `/api/places/photo?name=${encodeURIComponent(photo.name)}` : null;
 }
 
 // WMO weather codes → label + emoji.
