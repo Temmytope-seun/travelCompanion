@@ -1,0 +1,9 @@
+{
+  "name": "JourneyAI — Travel Companion",
+  "short_name": "JourneyAI",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f3ee",
+  "theme_color": "#14213d",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
