@@ -2,7 +2,8 @@ import { useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ExternalLink, Loader2, Plane, Sparkles, X } from "lucide-react";
 import { Brand, RouteArt } from "../components/ui.jsx";
 import { INTERESTS, PARTIES, STAY_TYPES } from "../data/catalog.js";
-import { DESTINATIONS, POPULAR, findDestination } from "../data/destinations.js";
+import { DESTINATIONS, POPULAR, findDestination, catalogFor, destinationFor } from "../data/destinations.js";
+import { canFetchCatalog, fetchCatalog } from "../lib/livePlaces.js";
 import { addDays, today, daysBetween, fmtRange } from "../lib/dates.js";
 import { googleFlightsUrl } from "../lib/links.js";
 import { countryInfo, geocode } from "../lib/api.js";
@@ -56,14 +57,23 @@ export default function Onboarding({ onDone, onDemo, canCancel, onCancel }) {
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   }
 
-  function generate() {
+  async function generate() {
     setGenerating(true);
+    const minDelay = new Promise((r) => setTimeout(r, 1900));
+    // Non-curated destinations: load real places from Google while the animation plays.
+    let catalog;
+    if (!catalogFor({ destination: f.destination, interests: f.interests }).curated && canFetchCatalog()) {
+      const dest = destinationFor({ destination: f.destination, city: f.city, coords: f.coords, flag: f.flag, currency: f.currency });
+      catalog = await fetchCatalog({ interests: f.interests }, dest).catch(() => undefined);
+    }
+    await minDelay;
     const trip = buildTrip({
       ...f,
+      catalog,
       flight: f.flightBooked ? { booked: true, ...f.flight, from: f.originAirport } : { booked: false },
       stay: f.stayBooked ? { booked: true, ...f.stay } : { booked: false, type: f.stay.type },
     });
-    setTimeout(() => onDone(trip), 1900);
+    onDone(trip);
   }
 
   const pickDest = (name) => {
@@ -256,7 +266,7 @@ function YesNo({ value, onChange }) {
 function Generating({ f }) {
   const steps = [
     `Reading your interests`,
-    `Searching ${f.city || f.destination} experiences`,
+    `Searching real places in ${f.city || f.destination}`,
     "Grouping nearby activities",
     "Checking opening times & travel distances",
     "Inserting meals and transfers",

@@ -4,6 +4,8 @@ import { dateRange, toMinutes, fromMinutes, splitDateTime } from "./dates.js";
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
 const roundUp15 = (m) => Math.ceil(m / 15) * 15;
+/** Rough distance in km — good enough for grouping nearby stops. */
+const km = (a, b) => Math.hypot((a.lat - b.lat) * 111, (a.lng - b.lng) * 111 * Math.cos((a.lat * Math.PI) / 180));
 const isMeal = (item) => item.meal || item.category === "food" || item.category === "cafe";
 const isActivity = (item) => !item.fixed && !isMeal(item) && !["transport", "stay", "flight", "packing"].includes(item.category);
 
@@ -56,6 +58,8 @@ export function placeToItem(place, time) {
     meal: place.meal,
     why: place.why,
     search: place.search,
+    mapsUri: place.mapsUri,
+    website: place.website,
   };
 }
 
@@ -129,14 +133,14 @@ export function generateItinerary(trip) {
     if (coastalDay) dayEnd = Math.min(dayEnd, 23 * 60 - travel);
 
     // Start time that avoids fixed blocks (check-in, checkout, transfers), or null if the day is full.
-    const fit = (t, dur) => {
+    const fit = (t, dur, limit = dayEnd) => {
       const blocks = items.filter((it) => it.fixed).map((it) => [toMinutes(it.time), toMinutes(it.time) + it.duration]);
       let s = t;
       for (let moved = true; moved;) {
         moved = false;
         for (const [a, b] of blocks) if (s < b && s + dur > a) { s = roundUp15(b + 10); moved = true; }
       }
-      return s + dur <= dayEnd ? s : null;
+      return s + dur <= limit ? s : null;
     };
 
     const foodFor = (meal, preferArea) => {
@@ -148,7 +152,7 @@ export function generateItinerary(trip) {
         if (premiumOk && i === n - 2) return pool.find((f) => f.premium) || pool[0];
         return nonPremium[i % Math.max(nonPremium.length, 1)] || pool[0];
       }
-      return pool[0];
+      return pool[i % pool.length];
     };
 
     const pick = (minute, evening) => {
@@ -156,7 +160,7 @@ export function generateItinerary(trip) {
       const lateAfternoon = coastalDay && minute >= 1020;
       const pool = places.filter((p) => !used.has(p.id) && p.area === area && p.category !== "dental");
       const rank = (list) => list
-        .map((p) => ({ p, s: scorePlace(p, trip) + (p.slot === (morning ? "morning" : "afternoon") ? 2 : 0) + (coastalDay && morning && p.category === "beach" ? 8 : 0) + (lateAfternoon && p.slot === "evening" ? 3 : 0) }))
+        .map((p) => ({ p, s: scorePlace(p, trip) - (lastLoc && p.lat ? km(lastLoc, p) * 0.6 : 0) + (p.slot === (morning ? "morning" : "afternoon") ? 2 : 0) + (coastalDay && morning && p.category === "beach" ? 8 : 0) + (lateAfternoon && p.slot === "evening" ? 3 : 0) }))
         .sort((a, b) => b.s - a.s)
         .map((x) => x.p);
       if (evening) {
@@ -174,6 +178,7 @@ export function generateItinerary(trip) {
 
     let cursor = dayStart;
     let filler = false;
+    let lastLoc = null;
     for (const [minute, kind] of slots) {
       if (kind === "breakfast" && dayStart >= 11 * 60) continue;
       const t = Math.max(minute, cursor);
@@ -194,11 +199,14 @@ export function generateItinerary(trip) {
         filler = true;
       }
       if (!place) continue;
-      const s = fit(t, place.duration || 60);
+      // Evenings out may run past midnight unless the day is cut short (coast trip, departure).
+      const limit = kind === "evening" && dayEnd >= 23 * 60 + 30 ? 25 * 60 : dayEnd;
+      const s = fit(t, place.duration || 60, limit);
       if (s === null) continue;
       if (!place.meal) used.add(place.id);
       const item = placeToItem(place, fromMinutes(s));
       items.push(item);
+      if (!place.meal && place.lat) lastLoc = place;
       cursor = roundUp15(s + item.duration + 15);
       if (coastalDay && kind === "breakfast") {
         items.push(simpleItem(fromMinutes(cursor - 5 > s + item.duration ? cursor - 5 : cursor), `Travel to ${area}`, "transport", travel, { lat: dest.areas[area].lat, lng: dest.areas[area].lng }));
@@ -237,7 +245,7 @@ export function reflow(items) {
   for (const it of sorted) {
     let start = toMinutes(it.time);
     if (!it.fixed && prevEnd > 0 && start < prevEnd + 10) start = roundUp15(prevEnd + 10);
-    if (!it.fixed && start + (it.duration || 0) > 24 * 60) continue;
+    if (!it.fixed && start + (it.duration || 0) > 25 * 60) continue;
     prevEnd = Math.max(prevEnd, start + (it.duration || 0));
     out.push(start === toMinutes(it.time) ? it : { ...it, time: fromMinutes(start) });
   }

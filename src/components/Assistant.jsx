@@ -79,7 +79,7 @@ export default function Assistant({ live, go }) {
 
       {messages.length < 2 && (
         <div className="chat-suggest">
-          {SUGGESTIONS.map((s) => <button key={s} onClick={() => send(s.replace("lek", dest.currency.code === "ALL" ? "lek" : dest.currency.code))}>{s.replace("lek", dest.currency.code === "ALL" ? "lek" : dest.currency.code)}</button>)}
+          {SUGGESTIONS.map((s) => (dest.name === "Albania" ? s : s.replace("Add parasailing tomorrow", "Add a museum tomorrow"))).map((s) => <button key={s} onClick={() => send(s.replace("lek", dest.currency.code === "ALL" ? "lek" : dest.currency.code))}>{s.replace("lek", dest.currency.code === "ALL" ? "lek" : dest.currency.code)}</button>)}
         </div>
       )}
 

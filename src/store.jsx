@@ -29,6 +29,7 @@ export function buildTrip(input) {
     flag: input.flag || known?.flag,
     coords: input.coords,
     currency: input.currency,
+    catalog: input.catalog,
     origin: input.origin || "Manchester",
     originAirport: input.originAirport || "",
     startDate: input.startDate,

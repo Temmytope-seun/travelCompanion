@@ -57,7 +57,7 @@ export async function countryInfo(name) {
   return { name: c.name.common, flag: c.flag, capital: c.capital?.[0], currency: { code, name: cur.name } };
 }
 
-export async function searchPlaces(query) {
+export async function searchPlaces(query, max = 9) {
   if (!PLACES_KEY) return [];
   const d = await getJson("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
@@ -65,9 +65,9 @@ export async function searchPlaces(query) {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": PLACES_KEY,
       "X-Goog-FieldMask":
-        "places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.websiteUri,places.googleMapsUri,places.photos,places.priceLevel,places.location",
+        "places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.websiteUri,places.googleMapsUri,places.photos,places.priceLevel,places.location,places.primaryType,places.types,places.businessStatus",
     },
-    body: JSON.stringify({ textQuery: query, maxResultCount: 9 }),
+    body: JSON.stringify({ textQuery: query, maxResultCount: max }),
   });
   return d.places || [];
 }

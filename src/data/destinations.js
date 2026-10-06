@@ -155,14 +155,20 @@ const GENERIC_STAYS = [
 export function catalogFor(trip) {
   const dest = destinationFor(trip);
   if (findDestination(trip.destination)?.name === "Albania") {
-    return { dest, places: ALBANIA_PLACES, food: ALBANIA_FOOD, stays: ALBANIA_STAYS };
+    return { dest, places: ALBANIA_PLACES, food: ALBANIA_FOOD, stays: ALBANIA_STAYS, curated: true };
   }
   const area = dest.city;
+  const live = trip.catalog?.places?.length ? trip.catalog : null;
   const place = (p) => ({ ...p, id: `g-${p.key}`, area, lat: dest.center.lat + p.dLat, lng: dest.center.lng + p.dLng, search: `${p.name} ${dest.city}` });
   return {
     dest,
-    places: GENERIC_PLACES.map(place),
-    food: GENERIC_FOOD.map(place),
-    stays: GENERIC_STAYS.map((s) => ({ ...s, area })),
+    // Real Google places when loaded for this trip; generic templates fill any gaps.
+    places: live ? live.places : GENERIC_PLACES.map(place),
+    food: [
+      ...(live?.food || []),
+      ...GENERIC_FOOD.map(place).filter((g) => !live?.food?.some((f) => f.meal === g.meal && !!f.premium === !!g.premium)),
+    ],
+    stays: live?.stays?.length ? live.stays : GENERIC_STAYS.map((s) => ({ ...s, area })),
+    live: !!live,
   };
 }

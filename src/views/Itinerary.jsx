@@ -201,8 +201,8 @@ function ItemCard({ item, index, count, days, dayIndex, dragging, onDragStart, o
           {item.outdoor && <span className="badge outline">Outdoor</span>}
           {item.booked && <span className="badge ok"><Check />Booked</span>}
           {item.category === "dental" && <span className="badge warn">Verify with provider</span>}
-          {item.lat && !item.fixed && <a className="link" style={{ fontSize: 12 }} href={mapsSearchUrl(item.search || `${item.title} ${trip.city}`)} target="_blank" rel="noreferrer">Map <ExternalLink /></a>}
-          {bookable && !item.booked && <a className="link" style={{ fontSize: 12 }} href={item.category === "dental" ? mapsSearchUrl(item.search || `dental clinic ${trip.city}`) : activityUrl(`${item.title} ${trip.city}`)} target="_blank" rel="noreferrer">Book <ExternalLink /></a>}
+          {item.lat && !item.fixed && <a className="link" style={{ fontSize: 12 }} href={item.mapsUri || mapsSearchUrl(item.search || `${item.title} ${trip.city}`)} target="_blank" rel="noreferrer">Map <ExternalLink /></a>}
+          {bookable && !item.booked && <a className="link" style={{ fontSize: 12 }} href={item.website || (item.category === "dental" ? mapsSearchUrl(item.search || `dental clinic ${trip.city}`) : activityUrl(`${item.title} ${trip.city}`))} target="_blank" rel="noreferrer">Book <ExternalLink /></a>}
         </div>
       </div>
       {!item.fixed && (

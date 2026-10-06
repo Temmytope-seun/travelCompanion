@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
-import { Search, MapPin, Clock, Plus, ExternalLink, Star, Sparkles, Globe, Loader2, Check, BedDouble, Stethoscope, Info } from "lucide-react";
+import { Search, MapPin, Clock, Plus, ExternalLink, Star, Sparkles, Globe, Loader2, Check, BedDouble, Stethoscope, Info, RefreshCw } from "lucide-react";
 import { useStore } from "../store.jsx";
 import { PageHead, Card, Empty } from "../components/ui.jsx";
 import { catalogFor } from "../data/destinations.js";
 import { cat } from "../data/catalog.js";
 import { addPlace, bestDayFor, matchPercent, reasonFor, scorePlace } from "../lib/itinerary.js";
 import { PLACES_KEY, searchPlaces, placePhotoUrl } from "../lib/api.js";
+import { fetchCatalog, fromGoogle, isLodging, isStale } from "../lib/livePlaces.js";
+import { generateItinerary } from "../lib/itinerary.js";
 import { activityUrl, airbnbUrl, bookingUrl, mapsSearchUrl } from "../lib/links.js";
 
 const TABS = [
@@ -28,7 +30,8 @@ const IN_TAB = {
 
 export default function Discover() {
   const { trip, setItinerary, notify, undo, updateTrip } = useStore();
-  const { dest, places, food, stays } = catalogFor(trip);
+  const { dest, places, food, stays, curated, live: hasLive } = catalogFor(trip);
+  const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState("foryou");
   const [q, setQ] = useState("");
   const [price, setPrice] = useState("any");
@@ -53,6 +56,22 @@ export default function Discover() {
     notify(`Added ${p.name} to Day ${r.day + 1} at ${r.item.time}`, { label: "Undo", run: undo });
   };
 
+  /** Load (or refresh) real places for this destination, then rebuild the plan with them. */
+  const loadPlaces = async () => {
+    setSyncing(true);
+    try {
+      const catalog = await fetchCatalog(trip, dest);
+      const next = { ...trip, catalog };
+      updateTrip({ catalog });
+      setItinerary(generateItinerary(next), "load real places");
+      notify(`Loaded ${catalog.places.length} places and ${catalog.food.length} restaurants in ${dest.city}. Itinerary rebuilt.`, { label: "Undo plan change", run: undo });
+    } catch (e) {
+      notify(e.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const searchLive = async () => {
     if (!q.trim()) return;
     if (!PLACES_KEY) { notify("Add VITE_GOOGLE_MAPS_API_KEY to search live Google Places."); return; }
@@ -66,8 +85,8 @@ export default function Discover() {
     <>
       <PageHead
         eyebrow={`Discover · ${dest.city}`}
-        title={tab === "foryou" ? `Based on your interests, I've selected these ${items.length} experiences.` : `Explore ${dest.city}`}
-        sub={tab === "foryou" ? "Ranked by interest match, popularity, budget fit and how well they sit with your other plans." : undefined}
+        title={q.trim() ? `Results for “${q.trim()}”` : tab === "foryou" ? `Based on your interests, I've selected these ${items.length} experiences.` : `Explore ${dest.city}`}
+        sub={q.trim() ? "Matching picks from your plan ideas below. Press Enter or Search live for Google results." : tab === "foryou" ? "Ranked by interest match, popularity, budget fit and how well they sit with your other plans." : undefined}
       />
 
       <div className="searchbar" style={{ marginBottom: 14 }}>
@@ -94,7 +113,24 @@ export default function Discover() {
         )}
       </div>
 
-      {live && <LiveResults results={live} onClear={() => setLive(null)} />}
+      {!curated && (
+        <div className="attention" style={{ marginBottom: 18, borderLeftColor: hasLive ? "var(--sea)" : undefined }}>
+          <span className="ic" style={hasLive ? { background: "var(--sea-soft)", color: "var(--sea)" } : undefined}>{hasLive ? <Check /> : <Globe />}</span>
+          <div>
+            <b>{hasLive ? `Real places in ${dest.city}, from Google` : `These are generic ideas for ${dest.city}`}</b>
+            <p>{hasLive
+              ? `Loaded ${new Date(trip.catalog.fetchedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}${isStale(trip.catalog) ? " — over 30 days ago, refresh for current details" : ""}. Ratings and prices come from Google; prices are estimates.`
+              : PLACES_KEY ? "Load rated attractions, restaurants and hotels picked for your interests. Your itinerary will be rebuilt (you can undo)." : "Add VITE_GOOGLE_MAPS_API_KEY to .env to load real places for any destination."}</p>
+          </div>
+          {PLACES_KEY && (
+            <button className={`btn ${hasLive ? "btn-secondary" : "btn-primary"}`} onClick={loadPlaces} disabled={syncing}>
+              {syncing ? <Loader2 className="spin" /> : hasLive ? <RefreshCw /> : <Globe />}{hasLive ? "Refresh" : "Load real places"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {live && <LiveResults results={live} onClear={() => setLive(null)} trip={trip} dest={dest} used={used} onAdd={add} updateTrip={updateTrip} notify={notify} />}
 
       {tab === "stays" ? <Stays stays={stays} trip={trip} updateTrip={updateTrip} notify={notify} /> : (
         <>
@@ -102,7 +138,7 @@ export default function Discover() {
           <div className="place-grid">
             {items.map((p) => <PlaceCard key={p.id} p={p} trip={trip} added={used.has(p.id)} onAdd={() => add(p)} day={bestDayFor(trip.itinerary, p) + 1} />)}
           </div>
-          {!items.length && <Empty icon={Search} title="No matches">Try another category, or search live places.</Empty>}
+          {!items.length && !live && <Empty icon={Search} title="No matches in our picks">Press Search live to look this up on Google.</Empty>}
         </>
       )}
 
@@ -122,7 +158,7 @@ function PlaceCard({ p, trip, added, onAdd, day }) {
         <c.icon />
         <div className="badges">
           <span className="badge match">{pct}% match</span>
-          <span className="badge"><Sparkles />AI pick</span>
+          {p.source === "google" ? <span className="badge"><Star style={{ color: "var(--sun)" }} />{p.rating ?? "—"} · {p.reviews?.toLocaleString("en-GB")}</span> : <span className="badge"><Sparkles />AI pick</span>}
         </div>
       </div>
       <div className="place-body">
@@ -139,8 +175,9 @@ function PlaceCard({ p, trip, added, onAdd, day }) {
           ) : (
             <button className="btn btn-primary btn-sm" onClick={onAdd}><Plus />Add to Day {day}</button>
           )}
-          <a className="btn btn-secondary btn-sm" href={mapsSearchUrl(p.search || `${p.name} ${trip.city}`)} target="_blank" rel="noreferrer">Map</a>
-          {p.cost > 0 && !p.meal && p.category !== "dental" && <a className="btn btn-ghost btn-sm" href={activityUrl(`${p.name} ${trip.city}`)} target="_blank" rel="noreferrer">Book <ExternalLink /></a>}
+          <a className="btn btn-secondary btn-sm" href={p.mapsUri || mapsSearchUrl(p.search || `${p.name} ${trip.city}`)} target="_blank" rel="noreferrer">{p.mapsUri ? "Reviews" : "Map"}</a>
+          {p.website && <a className="btn btn-ghost btn-sm" href={p.website} target="_blank" rel="noreferrer">Website <ExternalLink /></a>}
+          {p.cost > 0 && !p.meal && p.category !== "dental" && !p.website && <a className="btn btn-ghost btn-sm" href={activityUrl(`${p.name} ${trip.city}`)} target="_blank" rel="noreferrer">Book <ExternalLink /></a>}
         </div>
       </div>
     </article>
@@ -170,9 +207,9 @@ function Stays({ stays, trip, updateTrip, notify }) {
                 <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{s.why.map((w) => <li key={w}>{w}</li>)}</ul>
               </div>
               <div className="place-actions">
-                <a className="btn btn-secondary btn-sm" href={s.type === "rental" ? airbnbUrl(trip) : bookingUrl(trip, `${s.area}`)} target="_blank" rel="noreferrer">View options <ExternalLink /></a>
+                <a className="btn btn-secondary btn-sm" href={s.website || s.mapsUri || (s.type === "rental" ? airbnbUrl(trip) : bookingUrl(trip, `${s.area}`))} target="_blank" rel="noreferrer">{s.website ? "Website" : s.mapsUri ? "Reviews" : "View options"} <ExternalLink /></a>
                 <button className="btn btn-primary btn-sm" onClick={() => {
-                  updateTrip((t) => ({ stay: { ...t.stay, booked: true, name: s.name, type: s.type, perNight: s.perNight } }));
+                  updateTrip((t) => ({ stay: { ...t.stay, booked: true, name: s.name, type: s.type, perNight: s.perNight, address: s.address || t.stay.address } }));
                   notify(`Accommodation saved: ${s.name}`);
                 }}>I booked this</button>
               </div>
@@ -206,7 +243,7 @@ function DentalIntro({ city }) {
   );
 }
 
-function LiveResults({ results, onClear }) {
+function LiveResults({ results, onClear, trip, dest, used, onAdd, updateTrip, notify }) {
   return (
     <Card title="Live results from Google" icon={Globe} action={<button className="btn btn-ghost btn-sm" onClick={onClear}>Clear</button>} style={{ marginBottom: 18 }}>
       {!results.length ? <p className="muted mt0">No live results.</p> : (
@@ -214,16 +251,37 @@ function LiveResults({ results, onClear }) {
           {results.map((p) => {
             const name = p.displayName?.text || "Place";
             const photo = placePhotoUrl(p.photos?.[0]);
+            const lodging = isLodging(p);
+            const place = fromGoogle(p, dest);
+            const added = used.has(place.id);
+            const isStay = lodging && trip.stay?.booked && trip.stay.name === name;
+            const c = cat(place.category);
             return (
-              <article className="card place hue-sea" key={p.id} style={{ boxShadow: "none" }}>
-                <div className="place-cover">{photo ? <img src={photo} alt={name} loading="lazy" /> : <MapPin />}
-                  <div className="badges"><span className="badge">Live · Google</span></div>
+              <article className={`card place hue-${lodging ? "slate" : c.hue}`} key={p.id} style={{ boxShadow: "none" }}>
+                <div className="place-cover">{photo ? <img src={photo} alt={name} loading="lazy" /> : lodging ? <BedDouble /> : <c.icon />}
+                  <div className="badges"><span className="badge">Live · Google</span>{!lodging && <span className="badge">{c.label}</span>}</div>
                 </div>
                 <div className="place-body">
                   <h3>{name}</h3>
-                  <div className="meta"><span><Star style={{ color: "var(--sun)" }} />{p.rating ?? "—"} ({p.userRatingCount ?? 0})</span></div>
+                  <div className="meta">
+                    <span><Star style={{ color: "var(--sun)" }} />{p.rating ?? "—"} ({p.userRatingCount ?? 0})</span>
+                    {!lodging && <span><MapPin />{place.area}</span>}
+                    {place.cost > 0 && <span>Est. £{place.cost} pp</span>}
+                  </div>
                   <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>{p.formattedAddress}</p>
                   <div className="place-actions">
+                    {lodging ? (
+                      isStay ? <span className="badge ok" style={{ padding: "6px 10px" }}><Check />Your stay</span> : (
+                        <button className="btn btn-primary btn-sm" onClick={() => {
+                          updateTrip((t) => ({ stay: { ...t.stay, booked: true, name, address: p.formattedAddress || "" } }));
+                          notify(`Accommodation saved: ${name}`);
+                        }}>I booked this</button>
+                      )
+                    ) : added ? (
+                      <span className="badge ok" style={{ padding: "6px 10px" }}><Check />In your plan</span>
+                    ) : (
+                      <button className="btn btn-primary btn-sm" onClick={() => onAdd(place)}><Plus />Add to Day {bestDayFor(trip.itinerary, place) + 1}</button>
+                    )}
                     {p.websiteUri && <a className="btn btn-secondary btn-sm" href={p.websiteUri} target="_blank" rel="noreferrer">Website <ExternalLink /></a>}
                     <a className="btn btn-ghost btn-sm" href={p.googleMapsUri || mapsSearchUrl(name)} target="_blank" rel="noreferrer">Reviews & directions</a>
                   </div>
